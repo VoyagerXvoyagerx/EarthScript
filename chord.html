@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>Semantic Chord Diagram</title>
+  <script src="https://d3js.org/d3.v6.min.js"></script>
+  <style>
+    body { margin:0; overflow:hidden; }
+    svg { width:100vw; height:100vh; }
+    .taskArc { stroke:#333; stroke-width:1px; }
+    .classArc { stroke:none; }
+    .ribbon  { fill-opacity:0.7; }
+    .task-label { font-family: sans-serif; font-size:20px; font-weight:bold; pointer-events:none; }
+  </style>
+</head>
+<body>
+<svg></svg>
+<div id="tooltip" style="position:fixed; pointer-events:none; background:rgba(255,255,255,0.95); border:1px solid #888; border-radius:4px; padding:6px 12px; font-size:14px; color:#222; box-shadow:0 2px 8px #0002; display:none; z-index:10;"></div>
+<script>
+(async () => {
+  const data = await d3.json('chord_data.json');
+  const w = window.innerWidth, h = window.innerHeight;
+  const outerR = Math.min(w,h)/2 - 40;
+  const innerR = outerR - 30;
+  const svg = d3.select('svg')
+    .attr('viewBox',[-w/2,-h/2,w,h]);
+
+  // 1) 画最外层的 task arcs
+  const arcTask = d3.arc()
+    .innerRadius(innerR+10)
+    .outerRadius(outerR);
+  svg.append('g')
+    .selectAll('path')
+    .data(data.task_order.map(t => {
+      const cls = data.classes.filter(d=>d.task===t);
+      return {
+        task: t,
+        startAngle: cls[0].startAngle,
+        endAngle:   cls[cls.length-1].endAngle,
+        color: d3.rgb(...data.task_colors[t].slice(0,3).map(x=>x*255))
+      };
+    }))
+    .enter()
+    .append('path')
+    .attr('class','taskArc')
+    .attr('d', d=>arcTask(d))
+    .attr('fill', d=>d.color);
+
+  // 1.1) 添加最外圈任务名称标签
+  svg.append('g')
+    .selectAll('text')
+    .data(data.task_order.map(t => {
+      const cls = data.classes.filter(d=>d.task===t);
+      return { task: t, startAngle: cls[0].startAngle, endAngle: cls[cls.length-1].endAngle };
+    }))
+    .enter()
+    .append('text')
+    .attr('class','task-label')
+    .attr('fill','#000')
+    .attr('dy','0.35em')
+    .attr('transform', d => {
+      const mid = (d.startAngle + d.endAngle)/2;
+      const angle = mid - Math.PI/2;
+      const r = outerR + 20;
+      const x = Math.cos(angle) * r;
+      const y = Math.sin(angle) * r;
+      let rotate = angle * 180/Math.PI;
+      if (rotate > 90 || rotate < -90) rotate += 180;
+      return `translate(${x},${y}) rotate(${rotate})`;
+    })
+    .attr('text-anchor', d => {
+      const ang = ((d.startAngle + d.endAngle)/2 - Math.PI/2) * 180/Math.PI;
+      return (ang > 90 || ang < -90) ? 'end' : 'start';
+    })
+    .text(d => d.task);
+
+  // 2) 画内层的 class arcs
+  const arcClass = d3.arc()
+    .innerRadius(innerR)
+    .outerRadius(innerR+5);
+  svg.append('g')
+    .selectAll('path')
+    .data(data.classes)
+    .enter()
+    .append('path')
+    .attr('class','classArc')
+    .attr('d', d=>arcClass(d))
+    .attr('fill', d=> {
+      const c = data.task_colors[d.task];
+      return d3.rgb(c[0]*255,c[1]*255,c[2]*255);
+    })
+    .on('mouseover', function(event, d) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.display = 'block';
+      tooltip.innerHTML = `<b>${d.task}:</b> ${d.class_name}`;
+      d3.select(this)
+        .attr('stroke', '#000')
+        .attr('stroke-width', 1.5);
+    })
+    .on('mousemove', function(event) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.left = (event.clientX + 16) + 'px';
+      tooltip.style.top  = (event.clientY + 8) + 'px';
+    })
+    .on('mouseout', function(event, d) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.display = 'none';
+      d3.select(this).attr('stroke', 'none');
+    });
+
+  // 3) 定义 ribbon 生成器
+  const ribbon = d3.ribbon().radius(innerR);
+
+  // 4) 为每条 chord 创建线性渐变
+  const defs = svg.append('defs');
+  data.chords.forEach((d,i) => {
+    const src = data.classes[d.source];
+    const tgt = data.classes[d.target];
+    const sa = (src.startAngle + src.endAngle) / 2;
+    const ta = (tgt.startAngle + tgt.endAngle) / 2;
+    const c1 = data.task_colors[src.task];
+    const c2 = data.task_colors[tgt.task];
+    // 为匹配 D3 坐标系，角度减去 90 度
+    const x1 = Math.cos(sa - Math.PI/2) * innerR;
+    const y1 = Math.sin(sa - Math.PI/2) * innerR;
+    const x2 = Math.cos(ta - Math.PI/2) * innerR;
+    const y2 = Math.sin(ta - Math.PI/2) * innerR;
+    const grad = defs.append('linearGradient')
+      .attr('id', 'grad' + i)
+      .attr('gradientUnits', 'userSpaceOnUse')
+      .attr('x1', x1)
+      .attr('y1', y1)
+      .attr('x2', x2)
+      .attr('y2', y2);
+    grad.append('stop').attr('offset','0%')
+        .attr('stop-color', d3.rgb(c1[0]*255,c1[1]*255,c1[2]*255));
+    grad.append('stop').attr('offset','100%')
+        .attr('stop-color', d3.rgb(c2[0]*255,c2[1]*255,c2[2]*255));
+    // 存储源/目标以供后续绘制 ribbon
+    d._source = src;
+    d._target = tgt;
+  });
+
+  // 5) 绘制 ribbons
+  svg.append('g')
+    .selectAll('path')
+    .data(data.chords)
+    .enter()
+    .append('path')
+    .attr('class','ribbon')
+    .attr('d', d => ribbon({
+      source: {
+        startAngle: d._source.startAngle,
+        endAngle:   d._source.endAngle
+      },
+      target: {
+        startAngle: d._target.startAngle,
+        endAngle:   d._target.endAngle
+      }
+    }))
+    .attr('fill', (d,i) => `url(#grad${i})`)
+    .attr('stroke','none')
+    .on('mouseover', function(event, d) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.display = 'block';
+      tooltip.innerHTML = `<b>${d._source.task}:</b> ${d._source.class_name}<br/><b>${d._target.task}:</b> ${d._target.class_name}`;
+      d3.select(this)
+        .attr('fill-opacity', 1)
+        .attr('stroke', '#333')
+        .attr('stroke-width', 1);
+    })
+    .on('mousemove', function(event) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.left = (event.clientX + 16) + 'px';
+      tooltip.style.top  = (event.clientY + 8) + 'px';
+    })
+    .on('mouseout', function(event, d) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.display = 'none';
+      d3.select(this)
+        .attr('fill-opacity', 0.7)
+        .attr('stroke', 'none');
+    });
+})();
+</script>
+</body>
+</html>
